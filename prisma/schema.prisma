@@ -1,0 +1,132 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Main Files table - stores metadata about all uploaded files
+model File {
+  id            String   @id @default(uuid())
+  originalName  String
+  storedName    String   @unique
+  filePath      String
+  fileType      FileType
+  fileSize      Int      // in bytes
+  mimeType      String
+  uploadDate    DateTime @default(now())
+  lastModified  DateTime @updatedAt
+  processed     Boolean  @default(false)
+  
+  // Optional metadata as JSON
+  metadata      Json?
+  
+  // Relations
+  processLogs         ProcessingLog[]
+  tags                FileTag[]
+  sourceConversions   Conversion[]    @relation("SourceFile")
+  outputConversions   Conversion[]    @relation("OutputFile")
+  
+  @@index([fileType])
+  @@index([uploadDate])
+  @@index([processed])
+}
+
+// Conversions table - track JSON/Excel conversions
+model Conversion {
+  id              String          @id @default(uuid())
+  sourceFileId    String?
+  outputFileId    String?
+  conversionType  ConversionType
+  status          ProcessStatus
+  createdAt       DateTime        @default(now())
+  
+  // Store conversion options as JSON
+  options         Json?
+  errorMessage    String?
+  
+  // Relations
+  sourceFile      File?           @relation("SourceFile", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  outputFile      File?           @relation("OutputFile", fields: [outputFileId], references: [id], onDelete: Cascade)
+  
+  @@index([conversionType])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Processing logs - track all operations performed on files
+model ProcessingLog {
+  id            String          @id @default(uuid())
+  fileId        String
+  operationType OperationType
+  status        ProcessStatus
+  startTime     DateTime        @default(now())
+  endTime       DateTime?
+  errorMessage  String?
+  
+  // Store operation details as JSON (input params, output info, etc)
+  details       Json?
+  
+  // Relations
+  file          File            @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  
+  @@index([fileId])
+  @@index([operationType])
+  @@index([status])
+  @@index([startTime])
+}
+
+// Tags for organizing files
+model FileTag {
+  id        String   @id @default(uuid())
+  fileId    String
+  tag       String
+  createdAt DateTime @default(now())
+  
+  // Relations
+  file      File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  
+  @@unique([fileId, tag])
+  @@index([tag])
+}
+
+// Enums
+enum FileType {
+  PDF
+  EXCEL
+  JSON
+  OTHER
+}
+
+enum OperationType {
+  UPLOAD
+  EXCEL_TO_JSON
+  JSON_TO_EXCEL
+  PDF_GENERATE
+  PDF_RENAME
+  PDF_MERGE
+  PDF_SPLIT
+  PDF_EXTRACT
+  DELETE
+  OTHER
+}
+
+enum ProcessStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ConversionType {
+  JSON_TO_EXCEL
+  EXCEL_TO_JSON
+}
+
