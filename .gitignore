@@ -6,3 +6,4 @@ uploads/*
 *.log
 /generated/prisma
 uploads
+.env.docker

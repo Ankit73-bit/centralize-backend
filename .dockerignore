@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.env
+.git
+.gitignore
+README.md
+.vscode
+.idea
+uploads/*
+!uploads/.gitkeep
+generated
+prisma/migrations
+.DS_Store
+*.log
