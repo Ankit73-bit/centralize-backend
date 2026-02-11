@@ -33,6 +33,8 @@ model File {
   tags                FileTag[]
   sourceConversions   Conversion[]    @relation("SourceFile")
   outputConversions   Conversion[]    @relation("OutputFile")
+  pdfSourceOperations PdfOperation[]      @relation("PdfSourceFile")
+  pdfOutputOperations PdfOperation[]      @relation("PdfOutputFile")
   
   @@index([fileType])
   @@index([uploadDate])
@@ -95,6 +97,39 @@ model FileTag {
   
   @@unique([fileId, tag])
   @@index([tag])
+}
+
+model PdfOperation {
+  id              String          @id @default(uuid())
+  operationType   PdfOperationType
+  sourceFileId    String?
+  outputFileId    String?
+  status          ProcessStatus
+  createdAt       DateTime        @default(now())
+  
+  // Operation-specific options
+  options         Json?
+  errorMessage    String?
+  
+  // Relations
+  sourceFile      File?           @relation("PdfSourceFile", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  outputFile      File?           @relation("PdfOutputFile", fields: [outputFileId], references: [id], onDelete: Cascade)
+  
+  @@index([operationType])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum PdfOperationType {
+  MERGE
+  SPLIT_PAGES
+  SPLIT_RANGE
+  SPLIT_FIXED
+  EXTRACT_PAGES
+  COMPRESS
+  ADD_WATERMARK
+  TO_IMAGES
+  DOC_TO_PDF
 }
 
 // Enums
