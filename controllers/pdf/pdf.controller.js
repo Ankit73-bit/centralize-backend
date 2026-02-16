@@ -553,9 +553,9 @@ class PdfController {
     }
 
     const options = {
-      opacity: opacity ? parseFloat(opacity) : 0.3,
-      fontSize: fontSize ? parseInt(fontSize) : 48,
-      rotation: rotation ? parseInt(rotation) : -45,
+      opacity: opacity ? parseFloat(opacity) : 0.1,
+      fontSize: fontSize ? parseInt(fontSize) : 200,
+      rotation: rotation ? parseInt(rotation) : 45,
       position: position || "diagonal",
     };
 

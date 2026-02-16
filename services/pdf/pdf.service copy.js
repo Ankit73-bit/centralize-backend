@@ -1,58 +1,15 @@
 const { PDFDocument, rgb, StandardFonts, degrees } = require("pdf-lib");
 const fs = require("fs-extra");
 const path = require("path");
-const { spawn } = require("child_process");
+const mammoth = require("mammoth");
+const PDFDocument2 = require("pdfkit");
 const {
   ValidationError,
   NotFoundError,
   FileProcessingError,
 } = require("../../utils/errors");
 
-// Path to Python scripts (adjust based on your deployment)
-const PYTHON_SCRIPTS_DIR = path.join(__dirname, "../../python_scripts");
-const PDF_HELPER_SCRIPT = path.join(PYTHON_SCRIPTS_DIR, "pdf_helper.py");
-const DOCX_TO_PDF_SCRIPT = path.join(PYTHON_SCRIPTS_DIR, "docx_to_pdf.py");
-
 class PdfService {
-  /**
-   * Execute Python script and return result
-   * @private
-   */
-  async _executePythonScript(scriptPath, args) {
-    return new Promise((resolve, reject) => {
-      const python = spawn("python3", [scriptPath, ...args]);
-
-      let stdout = "";
-      let stderr = "";
-
-      python.stdout.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      python.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      python.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`Python script failed: ${stderr || stdout}`));
-          return;
-        }
-
-        try {
-          const result = JSON.parse(stdout);
-          resolve(result);
-        } catch (e) {
-          reject(new Error(`Failed to parse Python output: ${stdout}`));
-        }
-      });
-
-      python.on("error", (err) => {
-        reject(new Error(`Failed to execute Python script: ${err.message}`));
-      });
-    });
-  }
-
   /**
    * Merge multiple PDFs into one
    * @param {Array<String>} filePaths - Array of PDF file paths
@@ -353,9 +310,9 @@ class PdfService {
   }
 
   /**
-   * Compress PDF using Python script with REAL compression levels
+   * Compress PDF
    * @param {String} filePath - PDF file path
-   * @param {String} level - Compression level: 'extreme', 'high', 'medium', 'low'
+   * @param {String} level - Compression level: 'extreme', 'recommended', 'low'
    * @param {String} outputPath - Output file path
    */
   async compressPdf(filePath, level, outputPath) {
@@ -364,35 +321,44 @@ class PdfService {
         throw new NotFoundError("PDF file", filePath);
       }
 
-      const validLevels = ["extreme", "high", "medium", "low"];
+      const validLevels = ["extreme", "recommended", "low"];
       if (!validLevels.includes(level)) {
         throw new ValidationError(
           `Invalid compression level. Must be: ${validLevels.join(", ")}`,
         );
       }
 
-      // Use Python script for real compression
-      const result = await this._executePythonScript(PDF_HELPER_SCRIPT, [
-        "compress",
-        filePath,
-        outputPath,
-        level,
-      ]);
+      const pdfBytes = await fs.readFile(filePath);
+      const pdfDoc = await PDFDocument.load(pdfBytes);
 
-      if (!result.success) {
-        throw new FileProcessingError(
-          `Python compression failed: ${result.error}`,
-        );
-      }
+      // Save with compression settings
+      // pdf-lib does basic compression with useObjectStreams
+      const compressedPdfBytes = await pdfDoc.save({
+        useObjectStreams: true,
+        addDefaultPage: false,
+        objectsPerTick: 50,
+      });
+
+      await fs.ensureDir(path.dirname(outputPath));
+      await fs.writeFile(outputPath, compressedPdfBytes);
+
+      const originalSize = pdfBytes.length;
+      const compressedSize = compressedPdfBytes.length;
+      const savedBytes = originalSize - compressedSize;
+      const compressionRatio =
+        savedBytes > 0
+          ? ((savedBytes / originalSize) * 100).toFixed(2)
+          : "0.00";
 
       return {
         filePath: outputPath,
         fileName: path.basename(outputPath),
-        originalSize: result.original_size,
-        compressedSize: result.compressed_size,
-        savedBytes: result.saved_bytes,
-        compressionRatio: result.compression_ratio,
-        level: result.level,
+        originalSize,
+        compressedSize,
+        savedBytes,
+        compressionRatio: `${compressionRatio}%`,
+        level,
+        pageCount: pdfDoc.getPageCount(),
       };
     } catch (error) {
       if (error.isOperational) throw error;
@@ -404,7 +370,7 @@ class PdfService {
   }
 
   /**
-   * Add text watermark to PDF using Python script with proper centering
+   * Add text watermark to PDF
    * @param {String} filePath - PDF file path
    * @param {String} watermarkText - Watermark text
    * @param {Object} options - Watermark options
@@ -420,27 +386,79 @@ class PdfService {
         throw new ValidationError("Watermark text is required");
       }
 
-      // Use Python script for proper watermarking
-      const result = await this._executePythonScript(PDF_HELPER_SCRIPT, [
-        "watermark",
-        filePath,
-        outputPath,
-        watermarkText,
-        JSON.stringify(options || {}),
-      ]);
+      const pdfBytes = await fs.readFile(filePath);
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const pages = pdfDoc.getPages();
 
-      if (!result.success) {
-        throw new FileProcessingError(
-          `Python watermarking failed: ${result.error}`,
-        );
-      }
+      const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      const {
+        opacity = 0.01,
+        fontSize = 48,
+        rotation = -45,
+        color = { r: 0.5, g: 0.5, b: 0.5 },
+        position = "center", // 'center', 'diagonal', 'top', 'bottom'
+      } = options || {};
+
+      pages.forEach((page) => {
+        const { width, height } = page.getSize();
+        const textWidth = font.widthOfTextAtSize(watermarkText, fontSize);
+        const textHeight = fontSize;
+
+        let x, y, angle;
+
+        switch (position) {
+          case "diagonal":
+            const centerX = width / 2;
+            const centerY = height / 2;
+
+            x = centerX - textWidth / 2 + fontSize * 0.15;
+            y = centerY - textHeight / 2;
+
+            angle = rotation;
+            break;
+
+          case "top":
+            x = (width - textWidth) / 2;
+            y = height - textHeight - 20;
+            angle = 0;
+            break;
+          case "bottom":
+            x = (width - textWidth) / 2;
+            y = 20;
+            angle = 0;
+            break;
+          case "center":
+          default:
+            x = (width - textWidth) / 2;
+            y = (height - textHeight) / 2;
+            angle = 0;
+        }
+
+        page.drawText(watermarkText, {
+          x,
+          y,
+          size: fontSize,
+          font,
+          color: rgb(color.r, color.g, color.b),
+          opacity,
+          rotate: degrees(angle),
+          xSkew: degrees(0),
+          ySkew: degrees(0),
+        });
+      });
+
+      const watermarkedPdfBytes = await pdfDoc.save();
+      await fs.ensureDir(path.dirname(outputPath));
+      await fs.writeFile(outputPath, watermarkedPdfBytes);
 
       return {
         filePath: outputPath,
         fileName: path.basename(outputPath),
-        pageCount: result.pages,
-        watermarkText: result.watermark,
-        options: options,
+        pageCount: pages.length,
+        watermarkText,
+        options: { opacity, fontSize, rotation, position },
+        size: watermarkedPdfBytes.length,
       };
     } catch (error) {
       if (error.isOperational) throw error;
@@ -452,7 +470,44 @@ class PdfService {
   }
 
   /**
-   * Convert DOCX to PDF using Python script with formatting preservation
+   * Convert PDF pages to images (placeholder - requires external tools)
+   * @param {String} filePath - PDF file path
+   * @param {String} format - Image format ('png' or 'jpg')
+   * @param {Number} dpi - DPI quality (default: 150)
+   * @param {String} outputDir - Output directory
+   */
+  async pdfToImages(filePath, format = "png", dpi = 150, outputDir) {
+    try {
+      if (!(await fs.pathExists(filePath))) {
+        throw new NotFoundError("PDF file", filePath);
+      }
+
+      // Note: This is a placeholder
+      // In production, you would use:
+      // - pdf-poppler (requires poppler-utils installed)
+      // - pdf2pic library
+      // - ImageMagick
+      // - Puppeteer for rendering
+
+      throw new FileProcessingError(
+        "PDF to images conversion requires additional system dependencies (poppler-utils or ImageMagick). This feature will be implemented when system tools are available.",
+        {
+          feature: "pdf-to-images",
+          requiredTools: ["poppler-utils", "ImageMagick"],
+          status: "coming_soon",
+        },
+      );
+    } catch (error) {
+      if (error.isOperational) throw error;
+      throw new FileProcessingError(
+        `Failed to convert PDF to images: ${error.message}`,
+        { originalError: error.message },
+      );
+    }
+  }
+
+  /**
+   * Convert DOCX to PDF
    * @param {String} filePath - DOCX file path
    * @param {String} outputPath - Output PDF path
    */
@@ -462,33 +517,119 @@ class PdfService {
         throw new NotFoundError("DOCX file", filePath);
       }
 
+      // Convert DOCX to HTML first
+      const result = await mammoth.convertToHtml({ path: filePath });
+      const html = result.value;
+
+      // Create PDF from HTML using PDFKit
       await fs.ensureDir(path.dirname(outputPath));
 
-      // Use Python script for better conversion
-      const result = await this._executePythonScript(DOCX_TO_PDF_SCRIPT, [
-        filePath,
-        outputPath,
-      ]);
+      return new Promise((resolve, reject) => {
+        const doc = new PDFDocument2({
+          margins: {
+            top: 72,
+            bottom: 72,
+            left: 72,
+            right: 72,
+          },
+        });
 
-      if (!result.success) {
-        throw new FileProcessingError(
-          `Python DOCX conversion failed: ${result.error}`,
-        );
-      }
+        const writeStream = fs.createWriteStream(outputPath);
 
-      return {
-        filePath: outputPath,
-        fileName: path.basename(outputPath),
-        size: result.output_size,
-        format: "pdf",
-        sourceFormat: "docx",
-        paragraphs: result.paragraphs,
-        tables: result.tables,
-      };
+        doc.pipe(writeStream);
+
+        // Simple HTML parsing and rendering
+        // Remove HTML tags for basic conversion
+        const plainText = html
+          .replace(/<style[^>]*>.*?<\/style>/gs, "")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&nbsp;/g, " ")
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"');
+
+        doc.fontSize(12).text(plainText, {
+          align: "left",
+          width: 470,
+        });
+
+        doc.end();
+
+        writeStream.on("finish", async () => {
+          const stats = await fs.stat(outputPath);
+          resolve({
+            filePath: outputPath,
+            fileName: path.basename(outputPath),
+            size: stats.size,
+            format: "pdf",
+            sourceFormat: "docx",
+          });
+        });
+
+        writeStream.on("error", reject);
+      });
     } catch (error) {
       if (error.isOperational) throw error;
       throw new FileProcessingError(
         `Failed to convert DOCX to PDF: ${error.message}`,
+        { originalError: error.message },
+      );
+    }
+  }
+
+  /**
+   * Convert TXT to PDF
+   * @param {String} filePath - TXT file path
+   * @param {String} outputPath - Output PDF path
+   */
+  async textToPdf(filePath, outputPath) {
+    try {
+      if (!(await fs.pathExists(filePath))) {
+        throw new NotFoundError("Text file", filePath);
+      }
+
+      const textContent = await fs.readFile(filePath, "utf-8");
+      await fs.ensureDir(path.dirname(outputPath));
+
+      return new Promise((resolve, reject) => {
+        const doc = new PDFDocument2({
+          margins: {
+            top: 72,
+            bottom: 72,
+            left: 72,
+            right: 72,
+          },
+        });
+
+        const writeStream = fs.createWriteStream(outputPath);
+
+        doc.pipe(writeStream);
+
+        doc.fontSize(12).font("Courier").text(textContent, {
+          align: "left",
+          width: 470,
+        });
+
+        doc.end();
+
+        writeStream.on("finish", async () => {
+          const stats = await fs.stat(outputPath);
+          resolve({
+            filePath: outputPath,
+            fileName: path.basename(outputPath),
+            size: stats.size,
+            format: "pdf",
+            sourceFormat: "txt",
+          });
+        });
+
+        writeStream.on("error", reject);
+      });
+    } catch (error) {
+      if (error.isOperational) throw error;
+      throw new FileProcessingError(
+        `Failed to convert text to PDF: ${error.message}`,
         { originalError: error.message },
       );
     }

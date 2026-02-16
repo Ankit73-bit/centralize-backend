@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -31,8 +25,8 @@ model File {
   // Relations
   processLogs         ProcessingLog[]
   tags                FileTag[]
-  sourceConversions   Conversion[]    @relation("SourceFile")
-  outputConversions   Conversion[]    @relation("OutputFile")
+  sourceConversions   Conversion[]        @relation("SourceFile")
+  outputConversions   Conversion[]        @relation("OutputFile")
   pdfSourceOperations PdfOperation[]      @relation("PdfSourceFile")
   pdfOutputOperations PdfOperation[]      @relation("PdfOutputFile")
   
@@ -59,6 +53,28 @@ model Conversion {
   outputFile      File?           @relation("OutputFile", fields: [outputFileId], references: [id], onDelete: Cascade)
   
   @@index([conversionType])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// PDF Operations table - track PDF processing tasks
+model PdfOperation {
+  id              String            @id @default(uuid())
+  operationType   PdfOperationType
+  sourceFileId    String?
+  outputFileId    String?
+  status          ProcessStatus
+  createdAt       DateTime          @default(now())
+  
+  // Operation-specific options
+  options         Json?
+  errorMessage    String?
+  
+  // Relations
+  sourceFile      File?             @relation("PdfSourceFile", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  outputFile      File?             @relation("PdfOutputFile", fields: [outputFileId], references: [id], onDelete: Cascade)
+  
+  @@index([operationType])
   @@index([status])
   @@index([createdAt])
 }
@@ -99,44 +115,13 @@ model FileTag {
   @@index([tag])
 }
 
-model PdfOperation {
-  id              String          @id @default(uuid())
-  operationType   PdfOperationType
-  sourceFileId    String?
-  outputFileId    String?
-  status          ProcessStatus
-  createdAt       DateTime        @default(now())
-  
-  // Operation-specific options
-  options         Json?
-  errorMessage    String?
-  
-  // Relations
-  sourceFile      File?           @relation("PdfSourceFile", fields: [sourceFileId], references: [id], onDelete: Cascade)
-  outputFile      File?           @relation("PdfOutputFile", fields: [outputFileId], references: [id], onDelete: Cascade)
-  
-  @@index([operationType])
-  @@index([status])
-  @@index([createdAt])
-}
-
-enum PdfOperationType {
-  MERGE
-  SPLIT_PAGES
-  SPLIT_RANGE
-  SPLIT_FIXED
-  EXTRACT_PAGES
-  COMPRESS
-  ADD_WATERMARK
-  TO_IMAGES
-  DOC_TO_PDF
-}
-
 // Enums
 enum FileType {
   PDF
   EXCEL
   JSON
+  IMAGE
+  DOCUMENT
   OTHER
 }
 
@@ -149,6 +134,10 @@ enum OperationType {
   PDF_MERGE
   PDF_SPLIT
   PDF_EXTRACT
+  PDF_COMPRESS
+  PDF_WATERMARK
+  PDF_TO_IMAGES
+  DOC_TO_PDF
   DELETE
   OTHER
 }
@@ -165,3 +154,14 @@ enum ConversionType {
   EXCEL_TO_JSON
 }
 
+enum PdfOperationType {
+  MERGE
+  SPLIT_PAGES
+  SPLIT_RANGE
+  SPLIT_FIXED
+  EXTRACT_PAGES
+  COMPRESS
+  ADD_WATERMARK
+  TO_IMAGES
+  DOC_TO_PDF
+}
